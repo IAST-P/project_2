@@ -1,0 +1,267 @@
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import SQLAlchemyError
+import requests
+from requests.auth import HTTPBasicAuth 
+import json
+import numpy as np
+import pandas as pd
+import math
+import traceback
+from datetime import datetime, timedelta
+def write_to_sql(df, table_name, mathedID=None):
+    # Create a connection string for MySQL using SQLAlchemy
+    user = 'user'
+    password = 'password'
+    host = 'host'
+    database = 'database'
+    engine = create_engine(f'mysql+pymysql://{user}:{password}@{host}/{database}')
+    try:
+        df.to_sql(table_name, con=engine, if_exists='append', index=False)
+        log_file = r"C:\Users\name\path\log.txt"
+        with open(log_file, "a") as file:
+            if mathedID is not None and not math.isnan(mathedID) and mathedID > 0:
+                massage = f"def [write_to_sql] Seccsecfully writed to {table_name} shape={df.shape} new={df.shape[0] - mathedID}"
+            else: 
+                massage = f"def [write_to_sql] Successfully written to {table_name}, shape={df.shape}, no new rows"
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            file.write(f"[{timestamp}] {massage}\n")       
+    except SQLAlchemyError as e:
+        log_file = r"C:\Users\name\path\log.txt"
+        with open(log_file, "a") as file:
+            massage = f"def [write_to_sql] Error occurred while writing to the database: {e}"
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            file.write(f"[{timestamp}] {massage}\n")
+    finally:
+        engine.dispose()
+def delete_rows_by_values(table_name, column_name, values):
+    user = 'user'
+    password = 'password'
+    host = 'host'
+    database = 'database'
+    engine = create_engine(f'mysql+pymysql://{user}:{password}@{host}/{database}')
+    try:
+        query = f"DELETE FROM {table_name} WHERE {column_name} IN :values"
+        with engine.connect() as connection:
+            connection.execute(text(query), {"values": tuple(values)})
+    except SQLAlchemyError as e:
+        log_file = r"C:\Users\name\path\log.txt"
+        with open(log_file, "a") as file:
+            massage = f"def [delete_rows_by_values] Error occurred while deleting from database: {e}"
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            file.write(f"[{timestamp}] {massage}\n")       
+    finally:
+        engine.dispose()        
+        
+def fetch_data(api_url, username, password):
+    try:
+        response = requests.get(api_url, auth=HTTPBasicAuth(username, password))
+        response.raise_for_status()  # Raise an error for bad status codes
+        data = response.json()  # Assuming the response is in JSON format
+        return data
+    except requests.exceptions.RequestException as e:
+        log_file = r"C:\Users\name\path\log.txt"
+        with open(log_file, "a") as file:
+            massage = f"def [fetch_data] Error fetching data: {e}"
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            file.write(f"[{timestamp}] {massage}\n")         
+        return None
+def add_to_dict (df, prefix, bd_table, write_fn, table_name, existing_ids):
+    prefix_2 = 'creatioContactId' if bd_table == '_operator' else 'creatioId'
+    prefix_map = {'_operator': 'name_', '_course': 'title'}
+    prefix_3 = prefix_map.get(bd_table, 'label')
+    if prefix == 'leadStageId':
+        df[prefix] = df[prefix].fillna("others")
+        t = df[~df[prefix].isin(existing_ids)][[prefix]]
+        t.rename(columns={prefix: prefix_2}, inplace=True)
+    else:
+        df[f'{prefix}_value'] = df[f'{prefix}_value'].fillna("others")
+        t = df[~df[f'{prefix}_value'].isin(existing_ids)][[f'{prefix}_displayValue', f'{prefix}_value']]
+        t.rename(columns={f'{prefix}_value': prefix_2, f'{prefix}_displayValue': prefix_3}, inplace=True)
+    t = t.drop_duplicates(subset=prefix_2)
+    if not t.empty:
+        write_to_sql(t, bd_table)
+        return 
+    else:
+        return 
+def preper_data(daf, primery_value=None):
+    suffixes = ('primaryImageValue', 'primaryColorValue')
+    daf = daf[[col for col in df.columns if not col.endswith(suffixes)]]
+    df_columns = set(daf.columns)
+    list_for_change = ['StartDate', 'DueDate', 'ModifiedOn', 'CreatedOn', 'WtelBridgedAt', 'WtelCreatedAt', 
+                       'WtelAnsweredAt', 'WtelHangupAt', 'WtelStoredAt', 'WtelCreatedAt', 'MovedToFinalStateOn', 
+                       'WtelQueueJoinedTime', 'WtelQueueBridgedAt', 'WtelQueueLivingAt', 'UsrDate']
+    list_for_change = [i for i in list_for_change if i in df_columns]
+    if list_for_change and len(list_for_change)>0:
+        for col in list_for_change:
+            daf.loc[:, col] = pd.to_datetime(daf[col], errors='coerce')
+    for i in ['timestamp', 'eventDate']:
+        if i in df_columns:
+            daf[i] = pd.to_datetime(pd.to_numeric(daf[i], errors='coerce')) 
+    list_for_change = ['type', 'timestamp', 'online', 'name', 'Status', 'Owner', 'Lead']
+    list_for_change = {item: item + '_' for item in list_for_change}
+    list_for_change = {key: value for key, value in list_for_change.items() if key in df_columns}
+    if list_for_change and len(list_for_change)>0:
+        daf = daf.rename(columns=list_for_change)  # Assign the result back to df
+    if primery_value and primery_value in df_columns:
+        daf = daf.dropna(subset=[primery_value])
+        daf = daf.drop_duplicates(subset=primery_value)
+    return daf
+def data_chech (data,j):
+    if j == 'events':
+        return bool(data)
+    else:
+        return bool(data and data['status'] == 'ok')
+def read_from_sql(table_name,column_name):
+    user = 'user'
+    password = 'password'
+    host = 'host'
+    database = 'database'
+    engine = create_engine(f'mysql+pymysql://{user}:{password}@{host}/{database}')
+    try:
+        query = f"SELECT {column_name} FROM {table_name}"
+        df = pd.read_sql(query, con=engine)
+        return df
+    except SQLAlchemyError as e:
+        log_file = r"C:\Users\name\path\log.txt"
+        with open(log_file, "a") as file:
+            massage = f"def [read_from_sql] Error occurred while reading from the database: {e}"
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            file.write(f"[{timestamp}] {massage}\n")         
+    finally:
+        engine.dispose()
+int_columns = ['amoId', 'UsrChatMark_displayValue', 'UsrChatIdEst', 'UsrCallMark_displayValue', 
+               'WtelCallCountToLine', 'WtelCallCountToClient', 'UsrAmoId', 'UsrPlan']
+username = 'username'
+password = 'password'
+today = datetime.now()
+previous_day_start = datetime(today.year, today.month, today.day) - timedelta(days=1)
+previous_day_star = int(previous_day_start.timestamp())
+if __name__ == "__main__":
+    try:
+        log_file = r"C:\Users\name\path\log.txt"
+        with open(log_file, "a") as file:
+            massage = f"----------------NEW UPDATE"
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            file.write(f"[{timestamp}] {massage}\n")
+        column_for_search = { '_lead_stage': 'creatioId', '_course': 'creatioId', '_activity_priority': 'creatioId', 
+                             '_activity_category': 'creatioId', '_activity_result': 'creatioId', '_lead_source': 'creatioId', 
+                             '_operator': 'creatioContactId', '_leads': 'Id', '_chats': 'Id', '_activities': 'Id', '_calls': 'Id', 
+                             '_events' : '_id_$oid', '_sales_goals' : 'Id'}
+        lookups_dict = ['lookups1', 'lookups2', 'lookups3', 'lookups4', 'lookups5', 'lookups6', 'lookups7']
+        for i in lookups_dict:
+            ttt = '_'+i.replace('-', '_')
+            sufix = column_for_search[ttt]
+            api_url = f"https://url/for/api?type={i}&all=True"
+            data = fetch_data(api_url, username, password)
+            if data:
+                df = pd.json_normalize(data['body'], sep='_')
+                if len(df) > 0:
+                    df = preper_data(df, sufix)
+                    for i_int in int_columns:
+                        if i_int in df.columns:
+                            df[i_int] = pd.to_numeric(df[i_int], errors='coerce').fillna(0).astype(int)
+                    if i == 'operator':
+                        df['online_'] = df['online_'].astype(bool)
+                        df['enabled'] = df['enabled'].astype(bool)
+                        df['departments'] = df['departments'].apply(lambda x: ', '.join(x) if isinstance(x, list) else x)
+                        df['queues'] = df['queues'].apply(lambda x: ', '.join(x) if isinstance(x, list) else x)
+                    data_fom_db = set(read_from_sql(ttt, sufix)[sufix])
+                    new_data = set(df[sufix])
+                    new_data = [value for value in new_data if value not in data_fom_db]
+                    if len(new_data)>0:
+                        df = df[df[sufix].isin(new_data)]
+                        write_to_sql(df, ttt)
+                else:
+                    massage = f"df is empty table={ttt}"
+                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    file.write(f"[{timestamp}] {massage}\n")                  
+            else:
+                massage = f"df is empty table={ttt}"
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                file.write(f"[{timestamp}] {massage}\n") 
+                    
+                    
+    
+        l_table = ['tabl1', 'tabl2', 'tabl3', 'tabl4', 'tabl5', 'tabl6']
+        key_add_to_dict = {
+            'tabl1' : [['Owner', '_operator'], ['UsrCourselist', '_course'], ['UsrApplicantSource', '_lead_source'], ['QualifyStatus', '_lead_stage']],
+            'tabl2' : [['CreatedBy', '_operator']],
+            'tabl3' : [['CreatedBy', '_operator'], ['Priority', '_activity_priority'], ['ActivityCategory', '_activity_category'],
+                            ['Status', '_activity_result'], ['Owner', '_operator']],
+            'tabl4': [['CreatedBy', '_operator']],
+            'tabl5' : [['leadStageId', '_lead_stage']],
+            'tabl6' : [['UsrManager', '_operator']]
+        }
+        delete_columns = [
+            'CreatedBy_displayValue', 'ModifiedBy_displayValue', 'Priority_displayValue', 'ActivityCategory_displayValue', 'Status_displayValue',
+            'UsrCourselist_displayValue', 'UsrApplicantSource_displayValue', 'Owner_displayValue', 'QualifyStatus_displayValue', 
+            'UsrChatMark_value', 'UsrChatMark', 'LeadDisqualifyReason_value', 'LeadTypeStatus_value', 'UsrPaymentmethod_value', 
+            'UsrDealType_value', 'UsrRejectionReason_value', 'UsrCourseType_value', 'WtelOperator_value', 'UsrCallMark_value', 
+            'WtelTransferTo_value', 'Notes', 'Type_value', 'UsrSubproject_value', 'Result_value', 'Result', 'Contact', 'ActivityCategory', 
+            'WtelChats', 'CreatedBy', 'Lead_', 'UsrProject', 'UsrSubproject', 'WtelOperator', 'WtelTransferFrom', 'WtelTransferTo', 
+            'UsrCallMark', 'WtelParentCDR', 'WtelContact', 'WtelNewHangupBy', 'WtelDirection', 'UsrOwnerIdEst', 'Status_', 'LeadType', 
+            'UsrCourseType', 'UsrRejectionReason', 'UsrCourselist', 'UsrPaymentmethod', 'UsrApplicantSource', 'Owner_', 'UsrDealType', 
+            'QualifiedContact', 'UsrManager_primaryImageValue', 'UsrManager_primaryColorValue', 'UsrPrcent', 'UsrManager_displayValue']
+        for j in l_table:
+            ttt = '_'+j.replace('-', '_')
+            sufix = column_for_search[ttt]
+            if j == 'events':
+                start_of_this_month = datetime(today.year, today.month, 1)
+                if today.month > 2:
+                    start_of_two_months_ago = datetime(today.year, today.month - 2, 1)
+                else:
+                    start_of_two_months_ago = datetime(today.year - 1, today.month + 10, 1)
+                start_of_two_months_ago_timestamp = int(start_of_two_months_ago.timestamp())
+                api_url = f"https://url/for/api?eventDateFrom={start_of_two_months_ago_timestamp}"
+            elif j == 'events':
+                api_url = f"https://url/for/api/{j}?goalFrom={start_of_two_months_ago_timestamp}&all=True"
+            else:
+                api_url = f"https://url/for/api/{j}?modifiedFrom={previous_day_star}&all=True"
+            data = fetch_data(api_url, username, password)
+            if data_chech(data,j):
+                df = pd.json_normalize(data['body'], sep='_') if j != 'events' else pd.json_normalize(data, sep='_')
+                if len(df) > 0:
+                    df = preper_data(df)
+                    for i_int in int_columns:
+                        if i_int in df.columns:
+                            df[i_int] = pd.to_numeric(df[i_int], errors='coerce').fillna(0).astype(int)
+                    for value in key_add_to_dict[j]:
+                        sufix_value = column_for_search[value[1]]
+                        id_dict = read_from_sql(value[1], sufix_value)
+                        id_dict = set(id_dict[sufix_value])
+                        add_to_dict(df, value[0], value[1], write_to_sql,ttt, id_dict)
+                    df = df[[col for col in df.columns if col not in delete_columns]]
+                    new_data = set(df[sufix])
+                    data_fom_db = set(read_from_sql(ttt, sufix)[sufix])
+                    new_data = [value for value in new_data if value in data_fom_db]
+                    if len(new_data)> 0:
+                        delete_rows_by_values(ttt, sufix, new_data)
+                    if len(df)>0:
+                        write_to_sql(df, ttt, len(new_data))
+                    else:
+                        with open(log_file, "a") as file:
+                            massage = f"df is empty table={ttt}"
+                            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            file.write(f"[{timestamp}] {massage}\n")
+                else:
+                    with open(log_file, "a") as file:
+                        massage = f"df is empty table={ttt}"
+                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        file.write(f"[{timestamp}] {massage}\n")                     
+            else:
+                with open(log_file, "a") as file:
+                    massage = f"def [data_chech] data['status'] != ok table={ttt}"
+                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    file.write(f"[{timestamp}] {massage}\n")  
+                
+        with open(log_file, "a") as file:
+            massage = f"--------END UPDATE"
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            file.write(f"[{timestamp}] {massage}\n\n")   
+    except Exception as e:
+        with open(log_file, "a") as file:
+            error_massage = traceback.format_exc()
+            massage = f"--MISTAKE\n {error_massage}"
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            file.write(f"[{timestamp}] {massage}\n") 
