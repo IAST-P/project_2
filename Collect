@@ -87,8 +87,8 @@ def data_chech (data,j):
         return bool(data and data['status'] == 'ok')
 int_columns = ['amoId', 'UsrChatMark_displayValue', 'UsrChatIdEst', 'UsrCallMark_displayValue', 
                'WtelCallCountToLine', 'WtelCallCountToClient', 'UsrAmoId', 'UsrPlan', 'UsrDealbudget', 'UsrFullcoursefee', 'UsrAmountofdiscount']
-username = 'pk-api'
-password = 'afdg%YHWdsg!@3rsGSgssd'
+username = 'username'
+password = 'password'
 if __name__ == "__main__":
 
     id_dict = pd.DataFrame(columns=['table', 'id'])
